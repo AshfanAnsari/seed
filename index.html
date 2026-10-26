@@ -102,13 +102,13 @@
     return {
       x: W * (small ? 0.46 : 0.295),
       y: H * (small ? 0.36 : 0.415),
-      r: Math.min(W, H) * (small ? 0.185 : 0.150)
+      r: Math.min(W, H) * (small ? 0.21 : 0.175)
     };
   }
 
   var drifters = [], wisps = [];
   var wind = { x: 14, gust: 0 };
-  var pointer = { x: -999, y: -999, vx: 0, px: -999 };
+  var pointer = { x: -999, y: -999, vx: 0, vy: 0, px: -999, py: -999 };
 
   function makeDrifter(x, y, burst){
     var a = Math.random() * Math.PI * 2;
@@ -240,24 +240,32 @@
   function newHeadSeed(){
     return { ang: Math.random() * Math.PI * 2, rad: Math.pow(Math.random(), 0.62) * (Math.random() < 0.12 ? 1.13 : 1.0),
       ph: Math.random() * Math.PI * 2, size: 7.5 + Math.random() * 5,
-      attached: true, regrow: 0, fade: Math.random() * 0.5 + 0.5 };
+      attached: true, regrow: 0, fade: Math.random() * 0.5 + 0.5, pending: 0, bvx: 0, bvy: 0 };
   }
   for (var hn = 0; hn < HEAD_N; hn++) head.push(newHeadSeed());
   function headSeedPos(hs, hg, breatheR){
     var rr = hg.r * hs.rad * breatheR;
     return { x: hg.x + Math.cos(hs.ang) * rr, y: hg.y + Math.sin(hs.ang) * rr * 0.96 };
   }
-  function detach(hs, hg, boost){
-    hs.attached = false; hs.regrow = 1.1 + Math.random() * 1.9;
+  function detach(hs, hg){
+    hs.attached = false; hs.pending = 0; hs.regrow = 1.1 + Math.random() * 1.9;
     var pos = headSeedPos(hs, hg, 1);
     var d = makeDrifter(pos.x, pos.y, true);
-    d.vx = 34 + Math.random() * 52 + (boost || 0);
-    d.vy = -28 + Math.random() * 30;
+    d.vx = 26 + Math.random() * 44 + (hs.bvx || 0);
+    d.vy = -24 + Math.random() * 26 + (hs.bvy || 0);
     d.size = hs.size + 1.8;
     d.ttl = 7 + Math.random() * 4;
     drifters.push(d);
   }
 
+
+  /* scatter slowly: triggers QUEUE a seed with a short random delay and a
+     directional boost, so the head peels gradually instead of bursting */
+  function queueDetach(hs, bvx, bvy, maxDelay){
+    if (!hs.attached || hs.pending > 0) return;
+    hs.pending = 0.04 + Math.random() * maxDelay;
+    hs.bvx = bvx; hs.bvy = bvy;
+  }
   /* ===== gusts: the wind breathes on its own ===== */
   var gust = { env: 0, next: 2.6, phase: 'idle', t: 0, released: false };
   function gustUpdate(dt){
@@ -279,7 +287,7 @@
     var hg = headGeom();
     var torn = 0;
     for (var i = 0; i < head.length && torn < 11; i++){
-      if (head[i].attached && Math.random() < 0.14){ detach(head[i], hg, 26); torn++; }
+      if (head[i].attached && Math.random() < 0.14){ queueDetach(head[i], 26, -6, 0.85); torn++; }
     }
     for (var j = 0; j < 5; j++){
       var a2 = Math.random() * Math.PI * 2;
@@ -326,13 +334,22 @@
         continue;
       }
       if (hs.fade < 1) hs.fade = Math.min(1, hs.fade + dt * 0.9);
+      if (hs.pending > 0){
+        hs.pending -= dt;
+        if (hs.pending <= 0){ detach(hs, hgNow); continue; }
+      }
       var pos = headSeedPos(hs, hgNow, breatheR);
-      var px = pos.x + (reduced ? 0 : Math.sin(now / 800 + hs.ph) * 1.7);
-      var py = pos.y + (reduced ? 0 : Math.cos(now / 950 + hs.ph) * 1.7);
+      var px = pos.x + (reduced ? 0 : Math.sin(now / 1750 + hs.ang * 2.0 + hs.ph * 0.35) * 2.1);
+      var py = pos.y + (reduced ? 0 : Math.cos(now / 1550 + hs.ang * 2.0 + hs.ph * 0.35) * 1.9);
       var dxp = px - pointer.x, dyp = py - pointer.y;
       var dp = Math.sqrt(dxp * dxp + dyp * dyp);
-      if (dp < 120 && Math.abs(pointer.vx) > 1.5){ detach(hs, hgNow, Math.abs(pointer.vx) * 2.2); continue; }
-      drawAttached(px, py, hs.ang, Math.max(3, hs.rad * hgNow.r * 0.86), hs.size, hs.fade * 0.92, hs.rad);
+      var spd = Math.sqrt(pointer.vx * pointer.vx + pointer.vy * pointer.vy);
+      if (dp < 120 && spd > 2 && Math.random() < 0.34){
+        queueDetach(hs, pointer.vx * 2.3, pointer.vy * 2.3, 0.5);
+        continue;
+      }
+      var sway = reduced ? 0 : Math.sin(now / 1650 + hs.ph) * 0.055;
+      drawAttached(px, py, hs.ang + sway, Math.max(3, hs.rad * hgNow.r * 0.86), hs.size, hs.fade * 0.92, hs.rad);
     }
 
     /* wisps */
@@ -351,7 +368,10 @@
       var wx = wind.x + wind.gust;
       var ddx = s.x - pointer.x, ddy = s.y - pointer.y;
       var ddp = Math.sqrt(ddx * ddx + ddy * ddy);
-      if (ddp < 130 && pointer.vx !== 0) s.vx += (1 - ddp / 130) * pointer.vx * 2.4 * dt * 8;
+      if (ddp < 130 && (pointer.vx !== 0 || pointer.vy !== 0)){
+        s.vx += (1 - ddp / 130) * pointer.vx * 2.4 * dt * 8;
+        s.vy += (1 - ddp / 130) * pointer.vy * 1.5 * dt * 8;
+      }
       s.vx += (wx - s.vx) * dt * 0.55;
       s.vy += ((-4 + Math.sin(now / 1400 + s.ph) * 3.2) - s.vy) * dt * 0.8;
       s.x += s.vx * dt + Math.sin(now / 900 + s.ph) * s.sway * dt;
@@ -380,7 +400,7 @@
     }
     var bt = 0;
     for (var bh = 0; bh < head.length && bt < 30; bh++){
-      if (head[bh].attached && Math.random() < 0.3){ detach(head[bh], hg, 12); bt++; }
+      if (head[bh].attached && Math.random() < 0.3){ queueDetach(head[bh], 12, -4, 0.65); bt++; }
     }
     for (var j = 0; j < 6; j++) wisps.push(makeWisp(hg.x + hg.r * 0.6, hg.y + (Math.random() - 0.5) * hg.r));
     var hint = document.getElementById('hint');
@@ -389,8 +409,8 @@
 
   var hero = document.getElementById('hero');
   hero.addEventListener('pointermove', function(e){
-    if (pointer.px > -100) pointer.vx = (e.clientX - pointer.px);
-    pointer.px = e.clientX; pointer.x = e.clientX; pointer.y = e.clientY;
+    if (pointer.px > -100){ pointer.vx = (e.clientX - pointer.px); pointer.vy = (e.clientY - pointer.py); }
+    pointer.px = e.clientX; pointer.py = e.clientY; pointer.x = e.clientX; pointer.y = e.clientY;
     var dx = (e.clientX / W - 0.5), dy = (e.clientY / H - 0.5);
     if (!reduced){
       document.getElementById('gSeed').style.transform = 'translate(' + (dx * -16) + 'px,' + (dy * -7) + 'px)';
