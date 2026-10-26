@@ -154,33 +154,42 @@
     }
     ctx.restore();
   }
-  /* a free seed: silk fan + stem + brown body */
-  function drawSeed(x, y, rot, sz, alpha){
+  /* a free seed: silk fan + stem + brown body. stalkLen lets a freshly
+     detached seed carry its whole filament with it (it eases back to the
+     natural beak length as it flies) instead of the stalk vanishing */
+  function drawSeed(x, y, rot, sz, alpha, stalkLen, fanR){
+    var stalk = (stalkLen === undefined) ? sz * 1.3 : stalkLen;
     ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
-    drawPappus(0, 0, -Math.PI / 2, sz * 1.55, alpha);
+    /* fanR carries the seed's attached fan radius across the detach, so the
+       fan doesn't change size in one frame when the seed leaves */
+    drawPappus(0, 0, -Math.PI / 2, fanR !== undefined ? fanR : sz * 1.55, alpha);
     ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
     ctx.strokeStyle = 'rgba(255,252,238,0.75)'; ctx.lineWidth = 0.7;
-    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, sz * 1.3); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, stalk); ctx.stroke();
     ctx.fillStyle = 'rgba(84,66,32,0.95)';
-    ctx.beginPath(); ctx.ellipse(0, sz * 1.52, 1.5, 2.9, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(0, stalk + 1.6, 1.5, 2.9, 0, 0, Math.PI * 2); ctx.fill();
     ctx.restore();
   }
   /* an attached seed: fan points AWAY from the head centre, body toward it —
      170 of these radiating is what makes the cluster read as a dandelion clock */
-  /* anatomy of one attached seed (per the reference): brown body near the
-     core, a fine stalk radiating out, and a wide airy umbrella of filaments
-     at the tip — hundreds overlapping is what makes the clock look soft */
+  /* anatomy of one attached seed (v7): a wide airy umbrella of filaments at
+     the tip, short beak, brown body tucked under the fan — 300 of these
+     units overlapping, layered outside-to-inside, is what makes the clock
+     look soft and full with no connecting sticks at all */
   function drawAttached(x, y, outAng, filLen, sz, alpha, radFrac){
+    /* option 2 (the user's pick): NO long stick connecting the tuft to the
+       core — each seed sits on the head as one complete unit, exactly the
+       anatomy it flies with: fan at the tip, a short beak, the brown body
+       tucked just under the fan. Density does the connecting. */
     var a = Math.max(0, Math.min(1, alpha));
     var dx = Math.cos(outAng), dy = Math.sin(outAng);
-    var bx = x - dx * filLen, by = y - dy * filLen;
-    ctx.save();
-    ctx.globalAlpha = a * 0.75;
-    ctx.strokeStyle = 'rgba(255,250,230,0.9)'; ctx.lineWidth = 0.7;
-    ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(x, y); ctx.stroke();
-    ctx.restore();
+    var beak = sz * 1.3;
+    var bx = x - dx * (beak + 1.6), by = y - dy * (beak + 1.6);
     drawPappus(x, y, outAng, sz * (0.85 + radFrac * 1.05), a * 0.8);
     ctx.save();
+    ctx.globalAlpha = a * 0.6;
+    ctx.strokeStyle = 'rgba(255,252,238,0.75)'; ctx.lineWidth = 0.7;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x - dx * beak, y - dy * beak); ctx.stroke();
     ctx.globalAlpha = a * 0.85;
     ctx.fillStyle = 'rgba(96,74,36,0.9)';
     ctx.beginPath(); ctx.ellipse(bx, by, 1.0, 1.8, outAng, 0, Math.PI * 2); ctx.fill();
@@ -235,7 +244,7 @@
 
   /* ===== the cluster head (user's method): attached seeds that sway,
          tear off under brush / gust / breath, stream away, then regrow ===== */
-  var HEAD_N = reduced ? 60 : 185;
+  var HEAD_N = reduced ? 60 : 300;
   var head = [];
   function newHeadSeed(){
     return { ang: Math.random() * Math.PI * 2, rad: Math.pow(Math.random(), 0.62) * (Math.random() < 0.12 ? 1.13 : 1.0),
@@ -249,12 +258,25 @@
   }
   function detach(hs, hg){
     hs.attached = false; hs.pending = 0; hs.regrow = 1.1 + Math.random() * 1.9;
-    var pos = headSeedPos(hs, hg, 1);
-    var d = makeDrifter(pos.x, pos.y, true);
+    /* start the free seed from the EXACT pose it was last drawn in attached
+       (flutter position, outward angle, full stalk, full alpha) so nothing
+       pops, snaps or vanishes on the detach frame — the flicker fix */
+    var fb = headSeedPos(hs, hg, 1);
+    var d = makeDrifter(hs._px !== undefined ? hs._px : fb.x, hs._py !== undefined ? hs._py : fb.y, true);
     d.vx = 26 + Math.random() * 44 + (hs.bvx || 0);
     d.vy = -24 + Math.random() * 26 + (hs.bvy || 0);
     d.size = hs.size + 1.8;
     d.ttl = 7 + Math.random() * 4;
+    /* brightness continuity: the attached fan renders at fade*0.92*0.8, so
+       the free seed starts at that same alpha (v7 forced 0.95 — every
+       detaching seed flashed brighter for a frame). noRamp stops the
+       burst-seed fade-in rule from pushing it back up */
+    d.alpha = (hs.fade !== undefined ? hs.fade : 1) * 0.74;
+    d.noRamp = true;
+    if (hs._fanR !== undefined) d.fanR = hs._fanR;
+    if (hs._ang !== undefined) d.rot = hs._ang + Math.PI / 2;
+    /* no stalk carry-over in v7: attached and flying seeds share the same
+       short-beak unit anatomy, so detach changes nothing visually */
     drifters.push(d);
   }
 
@@ -346,10 +368,15 @@
       var spd = Math.sqrt(pointer.vx * pointer.vx + pointer.vy * pointer.vy);
       if (dp < 120 && spd > 2 && Math.random() < 0.34){
         queueDetach(hs, pointer.vx * 2.3, pointer.vy * 2.3, 0.5);
-        continue;
+        /* NO continue here — v7 skipped this seed's draw for one frame when
+           the brush queued it, so the head twinkled wherever the brush
+           passed. That one-frame vanish WAS the remaining flicker. */
       }
       var sway = reduced ? 0 : Math.sin(now / 1650 + hs.ph) * 0.055;
-      drawAttached(px, py, hs.ang + sway, Math.max(3, hs.rad * hgNow.r * 0.86), hs.size, hs.fade * 0.92, hs.rad);
+      var filLen = Math.max(3, hs.rad * hgNow.r * 0.86);
+      hs._px = px; hs._py = py; hs._ang = hs.ang + sway; hs._fil = filLen;
+      hs._fanR = hs.size * (0.85 + hs.rad * 1.05);
+      drawAttached(px, py, hs.ang + sway, filLen, hs.size, hs.fade * 0.92, hs.rad);
     }
 
     /* wisps */
@@ -378,14 +405,19 @@
       s.y += s.vy * dt;
       s.rot += s.vr * dt + Math.sin(now / 1100 + s.ph) * 0.12 * dt;
       if (s.ttl !== Infinity){
-        if (s.life < 0.7) s.alpha = Math.min(0.95, s.alpha + dt * 1.6);
+        if (s.life < 0.7 && !s.noRamp) s.alpha = Math.min(0.95, s.alpha + dt * 1.6);
         if (s.life > s.ttl - 2.5) s.alpha -= dt * 0.4;
         if (s.life > s.ttl || s.x > W + 60 || s.y < -60){ drifters.splice(di, 1); continue; }
       } else {
         if (s.x > W + 40){ s.x = -30; s.y = Math.random() * H * 0.75; }
         if (s.y < -40) s.y = H * 0.6;
       }
-      drawSeed(s.x, s.y, s.rot, s.size, s.alpha);
+      /* a carried filament eases back to the seed's natural beak length */
+      if (s.stalk !== undefined){
+        var stalkTgt = s.size * 1.3;
+        s.stalk += (stalkTgt - s.stalk) * Math.min(1, dt * 2.4);
+      }
+      drawSeed(s.x, s.y, s.rot, s.size, s.alpha, s.stalk, s.fanR);
     }
     requestAnimationFrame(frame);
   }
